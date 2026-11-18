@@ -1,0 +1,10 @@
+{
+  "name": "trucking-pricing",
+  "private": true,
+  "description": "Tính cước trucking (Google Apps Script) — test chạy bằng Node",
+  "scripts": {
+    "test": "node --test tests/server.test.js tests/ui.test.js",
+    "push": "clasp push",
+    "pull": "clasp pull"
+  }
+}

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <?!= include('Styles') ?>
+</head>
+<body>
+  <header>
+    <?!= include('Logo') ?>
+    <h1>Tính cước trucking</h1>
+    <p>Tra tuyến, chọn phương tiện và tính phụ phí nhiên liệu.</p>
+  </header>
+
+  <form id="f" novalidate>
+    <? if (error) { ?><p class="alert" role="alert"><?= error ?></p><? } ?>
+
+    <div class="row">
+      <label>Đầu tuyến
+        <select id="h">
+          <? for (const hub of info.hubs) { ?><option value="<?= hub.id ?>"><?= hub.label ?></option><? } ?>
+        </select>
+      </label>
+      <label>Loại hàng
+        <select id="m"><option>LCL</option><option>FCL</option></select>
+      </label>
+    </div>
+
+    <label for="a">Địa chỉ giao hàng</label>
+    <div class="combo">
+      <input id="a" placeholder="VD: KCN Pho Noi, Yen My hoặc 20.93, 106.05" autocomplete="off" spellcheck="false"
+             role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="sug">
+      <ul id="sug" role="listbox" hidden></ul>
+    </div>
+    <small id="hint" aria-live="polite">Gõ địa chỉ có dấu hoặc không dấu rồi chọn một gợi ý.</small>
+
+    <label for="r">Tuyến đối chiếu</label>
+    <select id="r" required></select>
+    <button type="button" id="map" class="secondary">Tìm tuyến bằng Google Maps</button>
+
+    <div id="truck">
+      <div class="row">
+        <label>Kích thước mỗi kiện (cm)
+          <input id="dim" placeholder="Dài × rộng × cao, VD 120x80x100" inputmode="decimal">
+        </label>
+        <label>Trọng lượng mỗi kiện (kg)
+          <input id="kg" type="number" min="0.01" step="any" inputmode="decimal">
+        </label>
+      </div>
+      <div class="checks">
+        <label class="check"><input type="checkbox" id="stack"> Cho phép xếp chồng</label>
+        <label class="check"><input type="checkbox" id="tilt"> Cho phép lật kiện</label>
+      </div>
+    </div>
+
+    <label id="cont" hidden>Container
+      <select id="c"><option value="C20">20'DC</option><option value="C40">40'HC</option></select>
+    </label>
+
+    <div class="row">
+      <label><span id="nLabel">Số kiện</span>
+        <input id="n" type="number" min="1" max="500" step="1" value="1" required>
+      </label>
+      <label>FSC (%)
+        <input id="p" type="number" min="0" max="200" step="any" required
+               value="<?= info.defaultFsc === null ? '' : info.defaultFsc ?>" placeholder="Nhập FSC hiện hành">
+      </label>
+    </div>
+    <small id="fscHint"></small>
+
+    <button id="go">Tính cước</button>
+    <div id="o" aria-live="polite"></div>
+  </form>
+
+  <script>const INFO = <?!= infoJson ?>;</script>
+  <?!= include('Script') ?>
+</body>
+</html>

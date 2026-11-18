@@ -1,0 +1,291 @@
+<script>
+(() => {
+  'use strict';
+  const el = id => document.getElementById(id);
+  const money = new Intl.NumberFormat('vi-VN');
+  const pct = v => new Intl.NumberFormat('vi-VN', {maximumFractionDigits: 4}).format(v) + '%';
+  const norm = s => String(s).toLowerCase().replace(/đ/g, 'd').normalize('NFD')
+    .replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
+  /** Gọi hàm server, trả về Promise. */
+  const call = (fn, ...args) => new Promise((resolve, reject) =>
+    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](...args));
+
+  /** Tạo phần tử DOM (luôn dùng textContent, không chèn HTML). */
+  const h = (tag, props, ...children) => {
+    const node = Object.assign(document.createElement(tag), props || {});
+    for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) node.append(c);
+    return node;
+  };
+  const newToken = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now());
+
+  const state = {
+    seq: 0,            // tăng mỗi lần đổi đầu tuyến / loại hàng → bỏ kết quả cũ
+    all: [],           // toàn bộ tuyến của bảng cước hiện tại [[dòng, nhãn]]
+    mapRoutes: [],     // tuyến gần theo bản đồ [{id, name, km}]
+    wardRoutes: [],    // tuyến theo đối chiếu xã cũ – mới [[dòng, nhãn]]
+    place: null,       // địa chỉ đã chọn {lat, lng, text, precise}
+    suggestions: [],
+    active: -1,
+    suggestSeq: 0,
+    token: newToken(),
+  };
+
+  const hint = text => { el('hint').textContent = text; };
+  const isFcl = () => el('m').value === 'FCL';
+  const routeArgs = () => [el('h').value, el('m').value, el('c').value];
+
+  /* ---------- Danh sách tuyến ---------- */
+
+  function textMatches() {
+    const q = norm(el('a').value);
+    const words = q.split(' ').filter(Boolean);
+    if (!q) return [];
+    return state.all.map(route => {
+      const s = norm(route[1]);
+      const score = s.includes(q) ? 100 : words.filter(w => (' ' + s + ' ').includes(' ' + w + ' ')).length / words.length;
+      return {route, score};
+    }).filter(x => x.score >= 0.55).sort((x, y) => y.score - x.score).slice(0, 12).map(x => x.route);
+  }
+
+  function renderRoutes() {
+    const select = el('r');
+    const previous = select.value;
+    const seen = new Set();
+    const group = (label, items) => {
+      const options = items.filter(([id]) => !seen.has(String(id)) && seen.add(String(id))).map(([id, name]) => new Option(name, id));
+      return options.length ? h('optgroup', {label}, options) : null;
+    };
+    const groups = [
+      group('Gần nhất theo Google Maps', state.mapRoutes.map(r => [r.id, r.name + ' · ' + r.km + ' km đường bộ'])),
+      group('Theo địa danh cũ – mới (tham khảo)', state.wardRoutes),
+      group('Khớp tên tuyến', textMatches()),
+    ].filter(Boolean);
+    const placeholder = new Option(groups.length ? 'Chọn tuyến phù hợp' : (el('a').value.trim() ? 'Chưa có tuyến phù hợp' : 'Nhập địa chỉ để tìm tuyến'), '');
+    select.replaceChildren(placeholder, ...groups);
+    if (previous && seen.has(previous)) select.value = previous;
+  }
+
+  function loadCatalog() {
+    const s = ++state.seq;
+    const fcl = isFcl();
+    el('cont').hidden = !fcl;
+    el('truck').hidden = fcl;
+    el('nLabel').textContent = fcl ? 'Số container' : 'Số kiện';
+    el('fscHint').textContent = el('h').value === 'HPH'
+      ? 'Hải Phòng: FSC áp dụng = FSC nhập × ' + String(INFO.hphMultiplier).replace('.', ',') + '.' : '';
+    state.all = [];
+    state.mapRoutes = [];
+    state.wardRoutes = [];
+    renderRoutes();
+    showMessage('Đang tải tuyến…');
+    call('catalog', ...routeArgs()).then(x => {
+      if (s !== state.seq) return;
+      state.all = x.routes;
+      showMessage(x.routes.length ? '' : 'Cần hỏi giá cho đầu tuyến này.');
+      renderRoutes();
+      lookupWards();
+      if (state.place) findNearby(state.place);
+    }).catch(e => s === state.seq && showError(e));
+  }
+
+  /* ---------- Đối chiếu xã cũ – mới ---------- */
+
+  let wardTimer;
+  function lookupWards() {
+    clearTimeout(wardTimer);
+    const query = el('a').value, s = state.seq;
+    if (query.trim().length < 5) { state.wardRoutes = []; renderRoutes(); return; }
+    wardTimer = setTimeout(() => {
+      call('lookupAddress', ...routeArgs(), query).then(found => {
+        if (s !== state.seq || query !== el('a').value) return;
+        state.wardRoutes = found;
+        renderRoutes();
+      }).catch(e => hint('Không đối chiếu được địa danh: ' + e.message));
+    }, 500);
+  }
+
+  /* ---------- Gợi ý địa chỉ ---------- */
+
+  const list = el('sug');
+  function closeSuggestions() {
+    list.hidden = true;
+    el('a').setAttribute('aria-expanded', 'false');
+    state.active = -1;
+  }
+
+  function renderSuggestions(source) {
+    state.active = -1;
+    if (!state.suggestions.length) return closeSuggestions();
+    list.replaceChildren(...state.suggestions.map((s, i) => {
+      const item = h('li', {id: 'sug-' + i, role: 'option'}, h('b', {textContent: s.main || s.text}), h('span', {textContent: s.secondary || ''}));
+      item.setAttribute('aria-selected', 'false');
+      item.addEventListener('mousedown', e => { e.preventDefault(); choose(i); });
+      return item;
+    }), h('li', {className: 'foot', textContent: source === 'places' ? 'Gợi ý từ Google Maps' : 'Kết quả từ Google Maps'}));
+    list.hidden = false;
+    el('a').setAttribute('aria-expanded', 'true');
+  }
+
+  function highlight(i) {
+    const items = list.querySelectorAll('li[role=option]');
+    if (!items.length) return;
+    state.active = (i + items.length) % items.length;
+    items.forEach((li, j) => li.setAttribute('aria-selected', String(j === state.active)));
+    el('a').setAttribute('aria-activedescendant', items[state.active].id);
+    items[state.active].scrollIntoView({block: 'nearest'});
+  }
+
+  let suggestTimer;
+  function requestSuggestions() {
+    clearTimeout(suggestTimer);
+    const query = el('a').value.trim();
+    if (query.length < 3) { state.suggestions = []; closeSuggestions(); return; }
+    suggestTimer = setTimeout(() => {
+      const s = ++state.suggestSeq;
+      call('suggestAddresses', query, el('h').value, state.token).then(x => {
+        if (s !== state.suggestSeq || query !== el('a').value.trim()) return;
+        state.suggestions = x.suggestions;
+        renderSuggestions(x.source);
+        if (!x.suggestions.length) hint('Google Maps chưa tìm thấy địa chỉ này. Thử thêm huyện/tỉnh hoặc dán tọa độ.');
+        else if (x.query && norm(x.query) === norm(query) && x.query !== query) hint('Đang tìm: ' + x.query);
+      }).catch(e => hint('Không lấy được gợi ý: ' + e.message));
+    }, 350);
+  }
+
+  async function choose(i) {
+    const s = state.suggestions[i];
+    if (!s) return;
+    closeSuggestions();
+    el('a').value = s.text;
+    state.suggestions = [];
+    try {
+      const place = s.lat !== undefined ? {lat: s.lat, lng: s.lng, text: s.text, precise: s.precise !== false}
+        : await call('resolvePlace', s.placeId, state.token);
+      state.token = newToken();     // kết thúc phiên Autocomplete
+      if (el('a').value !== s.text) return;
+      state.place = Object.assign({text: s.text}, place);
+      renderRoutes();
+      lookupWards();
+      findNearby(state.place);
+    } catch (e) {
+      hint(e.message);
+    }
+  }
+
+  /* ---------- Tuyến gần theo bản đồ ---------- */
+
+  function findNearby(place) {
+    const s = state.seq, text = el('a').value.trim();
+    const button = el('map');
+    button.disabled = true;
+    hint('Đang đo khoảng cách đường bộ…');
+    call('nearbyRoutes', ...routeArgs(), place).then(x => {
+      if (s !== state.seq || text !== el('a').value.trim()) return;
+      state.mapRoutes = x.routes;
+      renderRoutes();
+      if (x.routes.length && !el('r').value) el('r').focus();
+      hint(x.message);
+    }).catch(e => {
+      if (s === state.seq) hint(e.message);
+    }).finally(() => { button.disabled = false; });
+  }
+
+  /* ---------- Kết quả báo giá ---------- */
+
+  function showMessage(text) { el('o').replaceChildren(...(text ? [h('p', {textContent: text})] : [])); }
+  function showError(e) { el('o').replaceChildren(h('p', {className: 'err', textContent: e.message || String(e)})); }
+
+  function quoteText(q) {
+    const lines = [
+      'BÁO GIÁ CƯỚC TRUCKING',
+      'Địa chỉ giao: ' + el('a').value.trim(),
+      'Tuyến: ' + q.route,
+    ];
+    if (q.cargo) lines.push('Hàng: ' + q.cargo.count + ' kiện ' + q.cargo.box.join('×') + ' cm, ' + money.format(q.cargo.kg) + ' kg/kiện');
+    for (const l of q.lines) lines.push('- ' + l.qty + ' × ' + l.label + ' × ' + money.format(l.rate) + ' đ = ' + money.format(l.amount) + ' đ');
+    lines.push('Cước gốc: ' + money.format(q.base) + ' đ');
+    lines.push('FSC ' + pct(q.fsc) + ': ' + money.format(q.fscAmount) + ' đ');
+    lines.push('TỔNG: ' + money.format(q.total) + ' đ');
+    if (q.note) lines.push(q.note);
+    return lines.join('\n');
+  }
+
+  function showQuote(q) {
+    const fscLabel = q.fscMultiplier !== 1
+      ? 'FSC ' + pct(q.fscInput) + ' × ' + String(q.fscMultiplier).replace('.', ',') + ' = ' + pct(q.fsc)
+      : 'FSC ' + pct(q.fsc);
+    const row = (label, value, cls) => h('tr', {className: cls || ''}, h('td', {colSpan: 3, textContent: label}), h('td', {textContent: value}));
+    const table = h('table', null,
+      h('thead', null, h('tr', null, ...['Phương tiện', 'SL', 'Đơn giá', 'Thành tiền'].map(t => h('th', {textContent: t})))),
+      h('tbody', null, q.lines.map(l => h('tr', null,
+        h('td', null, l.label, l.perTruck ? h('small', {textContent: '≤ ' + l.perTruck + ' kiện/xe'}) : null),
+        h('td', {textContent: l.qty}),
+        h('td', {textContent: money.format(l.rate)}),
+        h('td', {textContent: money.format(l.amount)})))),
+      h('tfoot', null,
+        row('Cước gốc', money.format(q.base)),
+        row(fscLabel, money.format(q.fscAmount)),
+        q.subtotal !== q.total ? row('Tạm tính (làm tròn ' + q.rounding.mode + ' ' + money.format(q.rounding.step) + ' đ)', money.format(q.subtotal)) : null,
+        row('Tổng cộng', money.format(q.total) + ' đ', 'total')));
+    const copy = h('button', {type: 'button', textContent: 'Sao chép báo giá'});
+    const status = h('small', {});
+    copy.addEventListener('click', () => {
+      const text = quoteText(q);
+      (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+        .then(() => { status.textContent = 'Đã sao chép.'; })
+        .catch(() => { window.prompt('Sao chép báo giá:', text); });
+    });
+    el('o').replaceChildren(...[
+      h('p', {className: 'route', textContent: q.route + (q.vehicle ? ' · ' + q.vehicle : '')}),
+      table,
+      q.note ? h('p', {className: 'note', textContent: q.note}) : null,
+      h('div', {className: 'actions'}, copy, status)].filter(Boolean));
+  }
+
+  /* ---------- Sự kiện ---------- */
+
+  el('a').addEventListener('input', () => {
+    state.place = null;
+    state.mapRoutes = [];
+    renderRoutes();
+    showMessage('');
+    hint('Gõ địa chỉ có dấu hoặc không dấu rồi chọn một gợi ý.');
+    requestSuggestions();
+    lookupWards();
+  });
+  el('a').addEventListener('keydown', e => {
+    if (list.hidden) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); highlight(state.active + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); highlight(state.active - 1); }
+    else if (e.key === 'Enter' && state.active >= 0) { e.preventDefault(); choose(state.active); }
+    else if (e.key === 'Escape') closeSuggestions();
+  });
+  el('a').addEventListener('blur', () => setTimeout(closeSuggestions, 150));
+
+  el('map').addEventListener('click', () => {
+    const query = el('a').value.trim();
+    if (!query) { hint('Nhập địa chỉ trước khi tìm.'); return; }
+    closeSuggestions();
+    findNearby(state.place || query);
+  });
+
+  ['h', 'm', 'c'].forEach(id => el(id).addEventListener('change', loadCatalog));
+
+  el('f').addEventListener('submit', e => {
+    e.preventDefault();
+    const row = Number(el('r').value);
+    const fsc = el('p').value.trim();
+    if (!row) return showError(new Error('Chọn tuyến đối chiếu.'));
+    if (fsc === '') return showError(new Error('Nhập FSC (%) hiện hành.'));
+    const button = el('go');
+    button.disabled = true;
+    showMessage('Đang tính…');
+    call('quoteCargo', el('h').value, row, isFcl() ? el('c').value : 'LCL', Number(el('n').value), Number(fsc),
+      el('dim').value, Number(el('kg').value), {stack: el('stack').checked, tilt: el('tilt').checked})
+      .then(showQuote).catch(showError).finally(() => { button.disabled = false; });
+  });
+
+  loadCatalog();
+})();
+</script>
