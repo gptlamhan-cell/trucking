@@ -18,6 +18,14 @@ test('parseVehicleKey_: phân biệt xe tải và container', () => {
   assert.equal(k("40'HC"), 'C40');
   assert.equal(k('Cont 40'), 'C40');
   assert.equal(k('Ghi chú'), '');
+  // Tiêu đề thật trong sheet: container kèm giới hạn tải, xe tải dạng "xe 1.25T".
+  assert.equal(k('20’ <20 t'), 'C20');
+  assert.equal(k('40’ <25 t'), 'C40');
+  assert.equal(k('20’ <17 t'), 'C20');
+  assert.equal(k('xe 1.25T'), '1.25');
+  assert.equal(k('Xe 2,5T'), '2.5');
+  assert.equal(k('1 T'), '1');
+  assert.equal(k('10T'), '10');
 });
 
 test('catalog: LCL chỉ lấy tuyến có giá xe tải, FCL theo container', () => {

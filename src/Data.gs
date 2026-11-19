@@ -72,32 +72,35 @@ function clearCache_() {
  * Chuyển tiêu đề cột phương tiện thành mã:
  *   "1.25 tấn" → "1.25", "20'DC" / "Cont 40" → "C20" / "C40".
  * Số 20/40 không kèm chữ "tấn"/"T" được hiểu là container (giữ như cũ).
+ * Chỉ xét ký hiệu ngay sau số đầu tiên, nên "20’ <20 t" (container, giới hạn tải 20 t) là "C20".
  */
 function parseVehicleKey_(header) {
   const text = String(header === null || header === undefined ? '' : header).trim();
   const match = text.match(/\d+(?:[.,]\d+)?/);
   if (!match) return '';
   const number = match[0].replace(',', '.');
-  const isTon = /t[aấ]n\b|\d\s*t\b/i.test(text);
-  const isContainer = /cont|['’′]|\bft\b|feet|\d\s*(dc|hc|gp|rf)\b|\b(dc|hc|gp|rf)\b/i.test(text) ||
-    (!isTon && (Number(number) === 20 || Number(number) === 40));
-  return (isContainer && !isTon ? 'C' : '') + number;
+  const after = text.slice(match.index + match[0].length);
+  const isTon = /^\s*(t[aấ]n|t)\b/i.test(after);
+  const isContainer = !isTon && (/cont|\b(dc|hc|gp|rf)\b/i.test(text) ||
+    /^\s*(['’′]|ft\b|feet\b|(dc|hc|gp|rf)\b)/i.test(after) || Number(number) === 20 || Number(number) === 40);
+  return (isContainer ? 'C' : '') + number;
 }
 
 /** Bảng cước của một đầu tuyến: {rows, keys, first}. */
 function data_(hub) {
   const layout = HUBS[hub];
   if (!layout) throw Error('Đầu tuyến không hợp lệ');
-  return cached_('rates:' + hub, CACHE_TTL.sheet, () => {
+  // Chỉ cache dữ liệu thô; mã phương tiện tính lại mỗi lần để sửa parseVehicleKey_ có hiệu lực ngay.
+  const {rows} = cached_('rates:' + hub, CACHE_TTL.sheet, () => {
     const sheet = openDb_().getSheetByName(hub);
     if (!sheet) throw Error('Không tìm thấy sheet ' + hub);
-    const rows = sheet.getRange(1, 1, sheet.getLastRow(), layout.columns).getValues();
-    const keys = (rows[1] || []).slice(2).map(parseVehicleKey_);
-    if (rows.length < layout.firstRow || !keys.some(Boolean)) {
-      throw Error('Bố cục sheet ' + hub + ' đã thay đổi: kiểm tra HUBS trong Config.gs (dòng tiêu đề phương tiện phải là dòng 2).');
-    }
-    return {rows, keys, first: layout.firstRow};
+    return {rows: sheet.getRange(1, 1, sheet.getLastRow(), layout.columns).getValues()};
   });
+  const keys = (rows[1] || []).slice(2).map(parseVehicleKey_);
+  if (rows.length < layout.firstRow || !keys.some(Boolean)) {
+    throw Error('Bố cục sheet ' + hub + ' đã thay đổi: kiểm tra HUBS trong Config.gs (dòng tiêu đề phương tiện phải là dòng 2).');
+  }
+  return {rows, keys, first: layout.firstRow};
 }
 
 /** Danh sách tuyến có giá cho chế độ (LCL/FCL) và loại container đang chọn. */
