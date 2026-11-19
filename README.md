@@ -92,7 +92,19 @@ clasp push
 
 Sau khi push: mở **Deploy → Manage deployments**, sửa deployment đang có và chọn **New version**. URL web app sẽ giữ nguyên.
 
-> Kiểm tra mục `webapp` trong `src/appsscript.json` (mặc định `executeAs: USER_DEPLOYING`, `access: ANYONE`) cho khớp với deployment hiện tại trước khi push.
+> Kiểm tra mục `webapp` trong `src/appsscript.json` (mặc định `executeAs: USER_DEPLOYING`, `access: ANYONE_ANONYMOUS`) cho khớp với deployment hiện tại trước khi push.
+
+### 4. Trang tĩnh (GitHub Pages)
+
+Link `script.google.com` báo lỗi "unable to open the file" khi trình duyệt đăng nhập nhiều tài khoản Google. Để tránh lỗi này, có bản giao diện tĩnh đặt trên GitHub Pages, gọi web app qua `doPost` (API JSON trong `WebApp.gs`) mà không kèm cookie Google. API chỉ cho gọi các hàm trong `API_FUNCTIONS_`.
+
+Sau khi sửa `Index`, `Script`, `Styles` hoặc `Logo`, tạo lại trang tĩnh rồi đăng file đầu ra lên repo GitHub Pages:
+
+```bash
+node tools/build-static.js https://script.google.com/macros/s/<ID>/exec ../tinh-cuoc/index.html
+```
+
+Web app phải có `access: ANYONE_ANONYMOUS` thì trang tĩnh mới gọi được.
 
 ## Test
 

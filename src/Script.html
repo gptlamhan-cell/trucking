@@ -7,9 +7,9 @@
   const norm = s => String(s).toLowerCase().replace(/đ/g, 'd').normalize('NFD')
     .replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
-  /** Gọi hàm server, trả về Promise. */
-  const call = (fn, ...args) => new Promise((resolve, reject) =>
-    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](...args));
+  /** Gọi hàm server, trả về Promise. Trang tĩnh (GitHub Pages) cung cấp window.API_CALL thay cho google.script.run. */
+  const call = window.API_CALL || ((fn, ...args) => new Promise((resolve, reject) =>
+    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](...args)));
 
   /** Tạo phần tử DOM (luôn dùng textContent, không chèn HTML). */
   const h = (tag, props, ...children) => {
